@@ -4,7 +4,7 @@
 ### If you have not already installed and configured xplat-cli,
 ### see http://azure.microsoft.com/en-us/documentation/articles/xplat-cli/
 ### for details on how to install, configure, and use the xplat-cli.
-### written by Trevor Eberl trevor@microsoft.com
+### written by Trevor Eberl 
 #############################
 
 debug=0
