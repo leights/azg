@@ -97,7 +97,8 @@ do
         result=$(which $i|grep "no $i")
 	if [ "$result" ]
 	then
-		"Error missing dependency $i"
+		echo "Error missing dependency $i"
+		echo "try: apt-get install $i"
 		exit 1
 	fi
 done
@@ -114,6 +115,8 @@ then
 		azure account import $AZURE_PubFile
 	fi
 	AZURE_AccName=$(azure account list --json|grep name|awk -F\" '{print $(NF-1)}')
+	echo Set default subscription to $AZURE_AccName
+	azure account set $AZURE_AccName
 else
 	echo "account valid: $AZURE_AccName"
 fi
@@ -140,45 +143,91 @@ do
 done
 }
 
-function createCluster
+function manageSA ()
 {
 
-#AZURE_AccName=$(azure account list --json|grep name|awk -F\" '{print $(NF-1)}')
-echo Set default subscription to $AZURE_AccName
-azure account set $AZURE_AccName
+saAction=$1
+if [ -z "$saAction" ]
+then
+	echo "Error: saAction missing"
+	exit 1
+fi
 
 if [ debug == 1 ]
 then
-	read -p "Press [Enter] key to create storage account"
+	read -p "Press [Enter] key to $saAction storage account"
 fi
 saexist=$(azure storage account list|grep $AZURE_SAName)
-if [ -n "$saexist" ]
+if [ "$saAction" == "create" ]
 then
-	echo "Storage account $AZURE_SAName exists, skipping..."
-	echo $saexist
-else
-	echo "Creating storage account..."
-	azure storage account create $AZURE_SAName --label $AZURE_SAName --location "$AZURE_Location" -v
+	if [ -z "$saexist" ]
+	then
+		echo "Creating storage account..."
+		azure storage account create $AZURE_SAName --label $AZURE_SAName --location "$AZURE_Location" 
+	fi
+	setSAEnvVars
 fi
+
+if [ "$saAction" == "destroy" ]
+then
+	if [ -n "$saexist" ]
+	then
+		echo "Storage account $AZURE_SAName exists, removing..."
+		azure storage account delete $AZURE_SAName -q
+	fi
+fi
+
+} 
+
+function setSAEnvVars
+{
 
 echo Setting account env variables...
 AZURE_STORAGE_ACCESS_KEY=$(azure storage account keys list $AZURE_SAName | grep Primary| awk  '{print $3}'); export AZURE_STORAGE_ACCESS_KEY
 AZURE_STORAGE_ACCOUNT=$AZURE_SAName;export AZURE_STORAGE_ACCOUNT
 
+}
+
+
+function manageVNet ()
+{
+vnetAction=$1
+if [ -z "$vnetAction" ]
+then
+	echo "Error: vnetAction missing"
+	exit 1
+fi
+
+
 if [ debug == 1 ]
 then
-	read -p "Press [Enter] to create vnet"
+	read -p "Press [Enter] to $vnetAction vnet"
 fi
 
 vnetexist=$(azure network vnet list|grep $AZURE_VNet)
-if [ -n "$vnetexist" ]
+if [ "$vnetAction" == "create" ]
 then
-  echo "VNet $AZURE_VNet exists, skipping..."
-  echo $vnetexist
-else
-	echo "Creating vnet..."
-	azure network vnet create --address-space 10.0.0.0 --cidr 18 --subnet-start-ip 10.0.0.0 --subnet-name $AZURE_SubNet --subnet-cidr 24 $AZURE_VNet -l "$AZURE_Location"
+	if [ -z "$vnetexist" ]
+	then
+		echo "Creating vnet..."
+		azure network vnet create --address-space 10.0.0.0 --cidr 18 --subnet-start-ip 10.0.0.0 --subnet-name $AZURE_SubNet --subnet-cidr 24 $AZURE_VNet -l "$AZURE_Location"
+	fi
 fi
+
+if [ "$vnetAction" == "destroy" ]
+then
+
+	if [ -n "$vnetexist" ]
+	then
+  		echo "VNet $AZURE_VNet exists, destroying..."
+  		azure network vnet delete $AZURE_VNet -q
+	fi
+fi
+
+}
+
+function createCluster
+{
 
 #create VMs
 
@@ -216,17 +265,17 @@ do
 		then
 			echo "getting disk count for $vm"
 			disks=$(azure storage blob list --container vhds|grep $vm|grep -c 1098437886464)
-			echo "$vm has $disks disks"
-			while [ $disks -lt $AZURE_DiskCount ]
+			echo "$vm has $disks disks of $AZURE_WorkerDiskCount"
+			while [ $disks -lt $AZURE_WorkerDiskCount ]
 			do
 				echo "adding disk to $vm"
 				azure vm disk attach-new $vm 1023
 				echo "getting current disk count for $vm"
 				disks=$(azure storage blob list --container vhds|grep $vm|grep -c 1098437886464)
-				echo "$vm has $disks of $AZURE_DiskCount created"
+				echo "$vm has $disks of $AZURE_WorkerDiskCount created"
 			done
 		fi
-		if [[ $disks -eq $AZURE_DiskCount || -z "$vmstatus" ]]
+		if [[ $disks -eq $AZURE_WorkerDiskCount || -z "$vmstatus" ]]
 			then
 				unset new_list
 
@@ -253,31 +302,84 @@ done
 
 }
 
-function vmActions
+function manageVM ()
 {
-vms=$(azure vm list)
-for vm in ${VMNameArray[*]}
-do
-	vmexist=""
-	vmexist=$(echo $vms|grep $vm)
-	if [ -n "$vmexist" ]
-	then
-		if [ $AZURE_Action == "start" ]
+laction=$1
+lvm=$2
+if [ -z "$lvm" ]
+then
+	echo "Error: manage missing vm"
+	exit 1
+fi
+if [ -z "$laction" ]
+then
+	echo "Error: managevm missing action"
+	exit 1
+fi
+
+case "$laction" in
+	stop)
+		bcmd="azure vm shutdown "
+		ecmd=""
+		;;
+	start)
+		bcmd="azure vm start "
+		ecmd=""
+		;;
+	destroy)
+		bcmd="azure vm delete "
+		ecmd=" -b -q"
+		;;
+esac
+
+if [ "$lvm" == "all" ]
+then
+	vms=$(azure vm list)
+	for vm in ${VMNameArray[*]}
+	do
+		vmexist=""
+		vmexist=$(echo $vms|grep $vm)
+		if [ -n "$vmexist" ]
 		then
-        		azure vm start $vm &
-		elif [ $AZURE_Action == "stop" ]
-		then
-        		azure vm shutdown $vm &
-		elif [ $AZURE_Action == "destroy" ]
-		then
-        		azure vm delete $vm -b -q
-		else
-			echo "action unknown, we should never get here"
+			echo "$laction on $vm"
+			echo "$bcmd $vm $ecmd"
+			$bcmd $vm $ecmd
 		fi
-        else
-		echo "VM $vm doesn't exist..."
-	fi
-done
+	done
+else
+	echo "$laction on $lvm"
+	$bcmd $lvm $ecmd
+fi
+		
+
+}
+
+function destroyVM ()
+{
+lvm=$1
+if [ -z "$lvm" ]
+then
+	echo "Error: destroyvm missing vm"
+	exit 1
+fi
+if [ "$lvm" == "all" ]
+then
+	vms=$(azure vm list)
+	for vm in ${VMNameArray[*]}
+	do
+		vmexist=""
+		vmexist=$(echo $vms|grep $vm)
+		if [ -n "$vmexist" ]
+		then
+			echo "destroying $vm"
+			azure vm delete $vm -b -q
+		fi
+	done
+else
+	echo "destroying $lvm"
+	azure vm delete $lvm -b -q
+fi
+		
 
 }
 
@@ -286,32 +388,6 @@ function destroyCluster
 
 #must remove VMs first
 vmActions
-
-#AZURE_AccName=$(azure account list --json|grep name|awk -F\" '{print $(NF-1)}')
-#echo Set default subscription to $AZURE_AccName
-#azure account set $AZURE_AccName
-
-if [ debug == 1 ]
-then
-	read -p "Press [Enter] key to delete storage account"
-fi
-saexist=$(azure storage account list|grep $AZURE_SAName)
-if [ -n "$saexist" ]
-then
-	#AZURE_STORAGE_ACCESS_KEY=$(azure storage account keys list $AZURE_SAName | grep Primary| awk  '{print $3}'); export AZURE_STORAGE_ACCESS_KEY
-	#AZURE_STORAGE_ACCOUNT=$AZURE_SAName;export AZURE_STORAGE_ACCOUNT
-
-	echo "Storage account $AZURE_SAName exists, removing..."
-	azure storage account delete $AZURE_SAName -q
-fi
-
-vnetexist=$(azure network vnet list|grep $AZURE_VNet)
-if [ -n "$vnetexist" ]
-then
-  echo "VNet $AZURE_VNet exists, destroying..."
-  azure network vnet delete $AZURE_VNet -q
-fi
-
 
 }
 
@@ -458,6 +534,24 @@ ssh -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_User@$AZURE_He
 ssh -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_User@$AZURE_HeadName.cloudapp.net /home/$AZURE_User/sgeconf.bash $AZURE_User $sgeHosts
 
 }
+
+function fixdns
+{
+getdns
+for vm in ${VMNameArray[*]}
+do
+	hosts=$(ssh -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_User@$vm.cloudapp.net "egrep -v $AZURE_VMName /etc/hosts")
+	finalhosts="$hosts""\n""$intHosts"
+	echo "updating /etc/hosts on $vm"
+	ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key "sudo chown $AZURE_User /etc/hosts"
+	echo -e "$finalhosts" | ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key 'cat > /etc/hosts'
+	#echo "$vm start"
+	#ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key 'cat /etc/hosts'
+	#echo "$vm end"
+
+done
+
+}
 # Main block
 
 createVMArray
@@ -469,6 +563,8 @@ case "$AZURE_Action" in
 		;;
 	create)
 		echo "creating cluster.."
+		manageSA create
+		manageVNet create
 		createCluster
 		cpKeys
 		configureSGE
@@ -477,22 +573,27 @@ case "$AZURE_Action" in
 		;;
 	stop)
 		echo "stopping cluster.."
-		vmActions
+		manageVM stop all
 		;;
 	start)
 		echo "starting cluster..."
-		vmActions
+		manageVM start all
 		;;
 	destroy)
 		echo "destroying cluster..."
 		warning
-		destroyCluster
+		manageVM destroy all
+		manageVNet destroy
+		manageSA destroy
 		;;
 	copykey)
 		cpKeys
 		;;
 	getdns)
 		getdns
+		;;
+	fixdns)
+		fixdns
 		;;
 	runcmd)
 		runCmd
