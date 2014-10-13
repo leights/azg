@@ -9,7 +9,7 @@
 
 debug=0
 
-CLUSTER_CONFIG_FILE="`dirname $0`/include.bash"
+CLUSTER_CONFIG_FILE="`dirname $0`/include.conf"
 if [ -f ${CLUSTER_CONFIG_FILE} ]
 then
         source ${CLUSTER_CONFIG_FILE}
@@ -21,7 +21,7 @@ fi
 
 function usage
 {
-    echo "usage: create-cluster.bash [[[-a (create|start|stop|destroy|listtemplates)][-p publishSettingsFile.xml ] [-n numberOfSlaveNodes] [-s sizeOfNodes]] | [-h]]"
+    echo "usage: create-cluster.bash [[[-a (create|start|stop|destroy|listtemplates)][-p publishSettingsFile.xml ] [-n numberOfWorkers] [-s sizeOfNodes]] | [-h]]"
 }
 
 while [ "$1" != "" ]; do
@@ -29,8 +29,8 @@ while [ "$1" != "" ]; do
 	-p | --publishfile )    shift
 				AZURE_PubFile=$1
 				;;
-        -n | --numberofslave )  shift
-				AZURE_SlaveCount=$1
+        -n | --numberofworkers )  shift
+				AZURE_WkrCount=$1
 				;;
 	-t | --template )	shift
 				AZURE_Template=$1
@@ -57,9 +57,9 @@ done
 
 # Confirm vars/args
 
-if [ -z $AZURE_SlaveCount ] 
+if [ -z $AZURE_WkrCount ] 
 then
-	echo Error: AZURE_SlaveCount missing
+	echo Error: AZURE_WkrCount missing
 	exit 1
 fi
 
@@ -81,12 +81,26 @@ then
 	usage
 	exit 1
 fi
-if [ -z $AZURE_SlaveCount ]
+if [ -z $AZURE_Action ]
 then
 	echo Error: AZURE_Action missing
 	usage
 	exit 1
 fi
+
+# Check dependencies   
+
+depArray=("expect" "node" "azure" "nc")
+
+for i in "${depArray[@]}"
+do
+        result=$(which $i|grep "no $i")
+	if [ "$result" ]
+	then
+		"Error missing dependency $i"
+		exit 1
+	fi
+done
 
 AZURE_AccName=$(azure account list --json|grep name|awk -F\" '{print $(NF-1)}')
 if [ -z $AZURE_AccName ]
@@ -106,7 +120,7 @@ fi
 
 if [ debug == 1 ]
 then
-	echo PubFile:$AZURE_PubFile SlaveCount:$AZURE_SlaveCount Template:$AZURE_Template VMSize:$AZURE_VMSize
+	echo PubFile:$AZURE_PubFile SlaveCount:$AZURE_WkrCount Template:$AZURE_Template VMSize:$AZURE_VMSize
 	read -p "Press [Enter] key to load account info"
 fi
 
@@ -116,13 +130,13 @@ fi
 function createVMArray
 {
 VMNameArray=()
-AZURE_MasterName="$AZURE_VMName-mstr"
-VMNameArray+=($AZURE_MasterName)
+AZURE_HeadName="$AZURE_VMName-hst"
+VMNameArray+=($AZURE_HeadName)
 
-for ((i=1;i<=$AZURE_SlaveCount;i++))
+for ((i=1;i<=$AZURE_WkrCount;i++))
 do
-	AZURE_SlaveName="$AZURE_VMName-slv$i"
-	VMNameArray+=($AZURE_SlaveName)
+	AZURE_WkrName="$AZURE_VMName-wkr$i"
+	VMNameArray+=($AZURE_WkrName)
 done
 }
 
@@ -339,13 +353,16 @@ fi
 
 for vm in ${VMNameArray[*]}
 do
-	while [ -z "$(nc -z -w 5 $vm.cloudapp.net 22 )" ]
+	sshStatus=$(nc -z -v -w 5 $vm.cloudapp.net 22  2>&1 | grep succeeded )
+	while [ -z "$sshStatus" ]
 	do
 		echo "waiting for ssh on $vm"
 		sleep 5
+		sshStatus=$(nc -z -v -w 5 $vm.cloudapp.net 22  2>&1 | grep succeeded )
 	done
 
-	sleep 5 # give it a few more seconds to respond correctly
+	echo "SSH port open, now to wait a bit before we try to copy the key"
+	sleep 10 # give it a few more seconds to respond correctly
 	echo "copying rsa key to $vm..."
 	expect $CP_KEY $vm.cloudapp.net $AZURE_User $AZURE_Pass rsa_key.pub
 done
@@ -363,19 +380,19 @@ done
 
 function configureSGE
 {
-if [ -e $AZURE_MasterScript ]
+if [ -e $AZURE_HeadScript ]
 then
 	echo ""
 else
-	echo "Error: missing $AZURE_MasterScript"
+	echo "Error: missing $AZURE_HeadScript"
 	exit
 fi
 
-if [ -e $AZURE_SlaveScript ]
+if [ -e $AZURE_WkrScript ]
 then
 	echo ""
 else
-	echo "Error: missing $AZURE_SlaveScript"
+	echo "Error: missing $AZURE_WkrScript"
 	exit
 fi
 
@@ -383,25 +400,26 @@ getdns
 
 for vm in ${VMNameArray[*]}
 do
-	if [[ $vm == *"-mstr"* ]]
+	if [[ $vm == *"-hst"* ]]
 	then
-		echo "Copying $AZURE_MasterScript to $vm"
-		scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_MasterScript $AZURE_User@$vm.cloudapp.net:/home/$AZURE_User/install.bash
+		echo "Copying $AZURE_HeadScript to $vm"
+		scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_HeadScript $AZURE_User@$vm.cloudapp.net:/home/$AZURE_User/install.bash
 	else
-		echo "Copying $AZURE_SlaveScript to $vm"
-		scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_SlaveScript $AZURE_User@$vm.cloudapp.net:/home/$AZURE_User/install.bash
+		echo "Copying $AZURE_WrkScript to $vm"
+		scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_WkrScript $AZURE_User@$vm.cloudapp.net:/home/$AZURE_User/install.bash
 	fi
 	#scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key ./setenv.bash $AZURE_User@$vm.cloudapp.net:/home/$AZURE_User/setenv.bash
 	#ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key /home/$AZURE_User/setenv.bash
 	hostResult=$(ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key grep $vm /etc/hosts)
-	if [ -z $hostResult ]
+	if [ -z "$hostResult" ]
 	then
 		echo "adding /etc/hosts entry to $vm"
 		ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key "sudo chown $AZURE_User /etc/hosts"
 		echo -e "$intHosts" | ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key 'cat >> /etc/hosts'
 	fi
 
-	ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key /home/$AZURE_User/install.bash $AZURE_MasterName
+	ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key "chmod +x /home/$AZURE_User/install.bash"
+	ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key /home/$AZURE_User/install.bash $AZURE_HeadName
 	
 done
 sgecpcfg
@@ -431,12 +449,13 @@ echo -e "group_name @allhosts" > $AZURE_SGEHostgroup
 echo -e "hostlist $sgeHosts" >> $AZURE_SGEHostgroup
 
 #copy files
-scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_MasterConfScript $AZURE_User@$AZURE_MasterName.cloudapp.net:/home/$AZURE_User/sgeconf.bash
-scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_SGEQConf $AZURE_User@$AZURE_MasterName.cloudapp.net:/home/$AZURE_User/queue.conf
-scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_SGEHostgroup $AZURE_User@$AZURE_MasterName.cloudapp.net:/home/$AZURE_User/hostgroup.conf
+scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_HeadConfScript $AZURE_User@$AZURE_HeadName.cloudapp.net:/home/$AZURE_User/sgeconf.bash
+scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_SGEQConf $AZURE_User@$AZURE_HeadName.cloudapp.net:/home/$AZURE_User/queue.conf
+scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_SGEHostgroup $AZURE_User@$AZURE_HeadName.cloudapp.net:/home/$AZURE_User/hostgroup.conf
 
 #run script
-ssh -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_User@$AZURE_MasterName.cloudapp.net /home/$AZURE_User/sgeconf.bash $AZURE_User $sgeHosts
+ssh -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_User@$AZURE_HeadName.cloudapp.net "chmod +x /home/$AZURE_User/sgeconf.bash"
+ssh -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_User@$AZURE_HeadName.cloudapp.net /home/$AZURE_User/sgeconf.bash $AZURE_User $sgeHosts
 
 }
 # Main block
@@ -453,6 +472,8 @@ case "$AZURE_Action" in
 		createCluster
 		cpKeys
 		configureSGE
+		AZURE_Cmd="sudo /etc/init.d/gridengine-exec restart"
+		runCmd
 		;;
 	stop)
 		echo "stopping cluster.."

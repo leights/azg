@@ -1,5 +1,0 @@
-Mon Oct 13 2014 14:04:19 GMT+0000 (UTC):
-{ [Error: getaddrinfo EIO] code: 'EIO', errno: 'EIO', syscall: 'getaddrinfo' }
-Error: getaddrinfo EIO
-    at errnoException (dns.js:37:11)
-    at Object.onanswer [as oncomplete] (dns.js:124:16)
