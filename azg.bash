@@ -9,6 +9,8 @@
 
 debug=0
 
+IFS=' '
+
 CLUSTER_CONFIG_FILE="`dirname $0`/include.conf"
 if [ -f ${CLUSTER_CONFIG_FILE} ]
 then
@@ -69,7 +71,13 @@ then
 	exit 1
 fi
 
-if [ -z $AZURE_VMSize ] 
+if [ -z $AZURE_VMSize_Head ] 
+then
+	echo Error: AZURE_VMSize missing
+	exit 1
+fi
+
+if [ -z $AZURE_VMSize_Worker ] 
 then
 	echo Error: AZURE_VMSize missing
 	exit 1
@@ -103,6 +111,8 @@ do
 	fi
 done
 
+# Verify/Set account
+
 AZURE_AccName=$(azure account list --json|grep name|awk -F\" '{print $(NF-1)}')
 if [ -z $AZURE_AccName ]
 then
@@ -127,8 +137,7 @@ then
 	read -p "Press [Enter] key to load account info"
 fi
 
-# Alternate way to get account
-# azure account list --json|grep name|awk -F: '{print $2}'|tr -d '"'|tr -d ","|tr -d ' '
+# create name array
 
 function createVMArray
 {
@@ -172,6 +181,20 @@ if [ "$saAction" == "destroy" ]
 then
 	if [ -n "$saexist" ]
 	then
+		SADisks=$(azure storage blob list vhds|grep -v status)
+		SADisksShort=$(echo $SADisks|grep $AZURE_VMName)
+		while [ -n "$SADisksShort" ]
+		do
+			#echo "short $SADisksShort"
+			echo ""
+			echo "SA Still has the below disks.  Sleeping for 5 and checking again..."
+			echo ""
+			echo $SADisks
+			sleep 5
+			SADisks=$(azure storage blob list vhds|grep -v status)
+			SADisksShort=$(echo $SADisks|grep $AZURE_VMName)
+		done
+
 		echo "Storage account $AZURE_SAName exists, removing..."
 		azure storage account delete $AZURE_SAName -q
 	fi
@@ -226,80 +249,98 @@ fi
 
 }
 
-function createCluster
+function createVM ()
 {
 
-#create VMs
+lvm=$1
+lvmSize=$2
+ldiskCount=$3
+lip=$4 #place holder for now
 
-vms=$(azure vm list)
-for vm in ${VMNameArray[*]}
-do
-	vmexist=""
-	vmexist=$(echo $vms|grep $vm)
-	if [ -n "$vmexist" ]
+if [ -z "$lvm" ]
+then
+	echo "Error: manage missing lvm"
+	exit 1
+fi
+
+if [ -z "$lvmSize" ]
+then
+	echo "Error: manage missing lvm size"
+	exit 1
+fi
+
+if [ -z "$ldiskCount" ]
+then
+	echo "Error: manage missing disk count"
+	exit 1
+fi
+
+
+vmexist=""
+vmexist=$(azure vm list|grep $lvm)
+if [ -n "$vmexist" ]
+then
+	echo "VM $vm exists, skipping..."
+	#echo $vmexist
+else
+	if [ debug == 1 ]
 	then
-		echo "VM $vm exists, skipping..."
-		#echo $vmexist
-	else
-		if [ debug == 1 ]
-		then
-			read -p "Press [Enter] key to create vm $vm"
-		fi
-		echo "Creating VM $vm..."
-		azure vm create -u https://$AZURE_SAName.blob.core.windows.net/vhds/$vm-OS.vhd -z $AZURE_VMSize -n $vm -e 22 -w $AZURE_VNet -b $AZURE_SubNet -l "$AZURE_Location" $vm $AZURE_Template $AZURE_User $AZURE_Pass
+		read -p "Press [Enter] key to create vm $vm"
 	fi
-done
+	echo "Creating VM $vm..."
+	azure vm create -u https://$AZURE_SAName.blob.core.windows.net/vhds/$lvm-OS.vhd -z $lvmSize -n $lvm -e 22 -w $AZURE_VNet -b $AZURE_SubNet -l "$AZURE_Location" $lvm $AZURE_Template $AZURE_User $AZURE_Pass
+fi
 
-#attach disks
-vmarray=$VMNameArray
-echo "attaching disks to vms"
-while [ ${vmarray} ] 
+addDisks $lvm $ldiskCount
+}
+
+function addDisks ()
+{
+
+lvm=$1
+ldiskCount=$2
+
+if [ -z "$ldiskCount" ]
+then
+	echo "Error: manage missing disk count"
+	exit 1
+fi
+
+if [ -z "$lvm" ]
+then
+	echo "Error: manage missing lvm"
+	exit 1
+fi
+
+
+echo "attaching $ldisks disks to $lvm"
+vmstatus=""
+echo "getting $lvm status"
+vmstatus=$(azure vm list |grep $lvm|awk '{print $3}')
+#echo status is $vmstatus
+while [ "$vmstatus" != "ReadyRole" ]
 do
-	for vm in ${vmarray[*]}
-	do
-		vmstatus=""
-		echo "getting $vm status"
-		vmstatus=$(azure vm list |grep $vm|awk '{print $3}')
-		#echo status is $vmstatus
-		if [ "$vmstatus" == "ReadyRole" ] 
-		then
-			echo "getting disk count for $vm"
-			disks=$(azure storage blob list --container vhds|grep $vm|grep -c 1098437886464)
-			echo "$vm has $disks disks of $AZURE_WorkerDiskCount"
-			while [ $disks -lt $AZURE_WorkerDiskCount ]
-			do
-				echo "adding disk to $vm"
-				azure vm disk attach-new $vm 1023
-				echo "getting current disk count for $vm"
-				disks=$(azure storage blob list --container vhds|grep $vm|grep -c 1098437886464)
-				echo "$vm has $disks of $AZURE_WorkerDiskCount created"
-			done
-		fi
-		if [[ $disks -eq $AZURE_WorkerDiskCount || -z "$vmstatus" ]]
-			then
-				unset new_list
-
-			
-				arrayCount=0
-				for item in ${vmarray[*]}
-				do
-				    #echo "working on $item"
-				    if [ "$item" == "$vm" ]
-				    then
-					echo "removing $item from array"
-					unset VMNAmeArray[$arrayCount]
-				        #new_list+=($item)
-				    fi
-					((arrayCount++))
-				done
-				vmarray=$new_list
-		fi
-	done
-
+	echo "waiting for $lvm to come online..."
+	sleep 10
+	vmstatus=$(azure vm list |grep $lvm|awk '{print $3}')
 done
 
-#postConfig
-
+if [ "$vmstatus" == "ReadyRole" ] 
+then
+	echo "getting disk count for $lvm"
+	disks=$(azure storage blob list --container vhds|grep $lvm|grep -c 1098437886464)
+	echo "$lvm has $disks disks of $ldiskCount"
+	while [ $disks -lt $ldiskCount ]
+	do
+		echo "adding disk to $lvm"
+		newdisk=$(($disks + 1))
+		#azure vm disk create -u https://$AZURE_SAName.blob.core.windows.net/vhds/$lvm-Data-$newdisk.vhd -e  "$lvm data disk $newdisk"
+		azure vm disk attach-new $lvm 1023 https://$AZURE_SAName.blob.core.windows.net/vhds/$lvm-DataDisk-$newdisk.vhd
+		echo "getting current disk count for $lvm"
+		disks=$(azure storage blob list --container vhds|grep $lvm|grep -c 1098437886464)
+		echo "$lvm has $disks of $ldiskCount created"
+	done
+fi
 }
 
 function manageVM ()
@@ -341,13 +382,13 @@ then
 		vmexist=$(echo $vms|grep $vm)
 		if [ -n "$vmexist" ]
 		then
-			echo "$laction on $vm"
-			echo "$bcmd $vm $ecmd"
+			echo "Running action $laction on $vm"
+			#echo "$bcmd $vm $ecmd"
 			$bcmd $vm $ecmd
 		fi
 	done
 else
-	echo "$laction on $lvm"
+	echo "Running action $laction on $lvm"
 	$bcmd $lvm $ecmd
 fi
 		
@@ -394,16 +435,22 @@ vmActions
 
 function warning
 {
+	setSAEnvVars
 	echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!WARNING!!!!!!!!!!!!!!!!!!!!!!!!!"
 	echo "This will delete all of the assets below w/o asking again!!"
 	echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!WARNING!!!!!!!!!!!!!!!!!!!!!!!!!"
 	echo ""
 	echo "Storage Account: $AZURE_SAName"
+	#azure storage blob list vhds
 	echo "Virtual Network: $AZURE_VNet"
 	#echo "VMs: $VMNameArray"
+	disks=$(azure storage blob list vhds --json)
 	for vm in ${VMNameArray[*]}
 	do
 		echo "VM: $vm"
+		echo "Disks:"
+		echo -e $disks|grep $vm|grep -v status
+		#azure vm disk list $vm|grep $vm
 	done
 	echo ""
 	echo "Do you want to do this?(y/n)"
@@ -427,6 +474,15 @@ else
 	ssh-keygen -f ./rsa_key -P ""
 fi
 
+	knownHosts=$(grep $vm ~/.ssh/known_hosts)
+	if [ -n "$knownHosts" ]
+	then
+		echo ""
+		echo "removing hosts from ~/.ssh/known_hosts"
+		echo ""
+		newHosts=$(cat ~/.ssh/known_hosts|grep -v $AZURE_VMName)
+		echo $newHosts > ~/.ssh/known_hosts
+	fi
 for vm in ${VMNameArray[*]}
 do
 	sshStatus=$(nc -z -v -w 5 $vm.cloudapp.net 22  2>&1 | grep succeeded )
@@ -552,6 +608,18 @@ do
 done
 
 }
+
+function configureDisks 
+{
+
+for vm in ${VMNameArray[*]}
+do
+	scp -oStrictHostKeyChecking=no -oCheckHostIP=no -i rsa_key $AZURE_DiskScript $AZURE_User@$vm.cloudapp.net:/home/$AZURE_User/configure-disks.bash
+	ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key "chmod +x /home/$AZURE_User/configure-disks.bash"
+	ssh -oStrictHostKeyChecking=no -oCheckHostIP=no $AZURE_User@$vm.cloudapp.net -i rsa_key sudo /home/$AZURE_User/configure-disks.bash $AZURE_HeadName
+done
+}
+
 # Main block
 
 createVMArray
@@ -565,8 +633,24 @@ case "$AZURE_Action" in
 		echo "creating cluster.."
 		manageSA create
 		manageVNet create
-		createCluster
+		for vm in ${VMNameArray[*]}
+		do
+			if [ $vm == "$AZURE_HeadName" ]
+			then
+				echo ""
+				echo "creating headnode"
+				echo ""
+				createVM $vm $AZURE_VMSize_Head $AZURE_HostDiskCount
+			else
+				echo ""
+				echo "creating workernode"
+				echo ""
+				createVM $vm $AZURE_VMSize_Worker $AZURE_WorkerDiskCount
+			fi
+		done
 		cpKeys
+		fixdns
+		configureDisks
 		configureSGE
 		AZURE_Cmd="sudo /etc/init.d/gridengine-exec restart"
 		runCmd
@@ -597,6 +681,9 @@ case "$AZURE_Action" in
 		;;
 	runcmd)
 		runCmd
+		;;
+	confdisk)
+		configureDisks
 		;;
 	sgecpcfg)
 		sgecpcfg

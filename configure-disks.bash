@@ -2,7 +2,7 @@
 
 function usage
 {
-    echo "usage: script.bash AZURE_HEAD"
+    echo "usage: script.bash AZURE_HEADNODE"
 }
 
 if [ "$(id -u)" != "0" ]; then
@@ -11,11 +11,15 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 echo "args ar $@"
-AZURE_HEAD=$1
+AZURE_HEADNODE=$1
+AZURE_DATA_MOUNT="/data"
+AZURE_RAID_DEVICE="/dev/md127"
+AZURE_NFS_MOUNT="/nfsdata"
+AZURE_EXPORTS_SUBNET="10.0.0.0/24"
 
-if [ -z $AZURE_HEAD ]
+if [ -z $AZURE_HEADNODE ]
 then
-        echo Error: AZURE_HEAD missing
+        echo Error: AZURE_HEADNODE missing
         usage
         exit 1
 fi
@@ -24,7 +28,7 @@ hostname=$(hostname)
 
 echo "postfix postfix/main_mailer_type select No configuration" | sudo debconf-set-selections
 
-if [ $hostname == "$AZURE_HEAD" ]
+if [ $hostname == "$AZURE_HEADNODE" ]
 then
 	apt-get install mdadm nfs-kernel-server -y
 else
@@ -44,78 +48,83 @@ then
 	if [ "$diskcount" -gt "1" ] 
 	then
 
-		if [ -b "/dev/md/data" ]
+		if [ -b "$AZURE_RAID_DEVICE" ]
 		then
-       		 echo "/dev/md/data alread exists moving on..."
+       		 echo "$AZURE_RAID_DEVICE alread exists moving on..."
 		else
 			echo ""
 			echo "Creating raid for $hostname"
 			echo ""
 			#read -p "Press [Enter] to create stripped disk out of $disks"
-			mdadm --create /dev/md/data --name=data --chunk=8 --level=0 --raid-devices=$diskcount $disks
-			mkfs -t ext4 /dev/md/data
-			mkdir /mnt/data
-			chmod -R 777 /mnt/data
-			mount /dev/md/data /mnt/data
-			echo "/dev/md/data/ /mnt/data   auto defaults,nobootwait,comment=cloudconfig 0       2" >> /etc/fstab
+			mdadm --create $AZURE_RAID_DEVICE --symlink=no --name=data --chunk=8 --level=0 --raid-devices=$diskcount $disks
+			mkfs -t ext4 $AZURE_RAID_DEVICE
+			mkdir $AZURE_DATA_MOUNT
+			chmod -R 777 $AZURE_DATA_MOUNT
+			mount $AZURE_RAID_DEVICE $AZURE_DATA_MOUNT
+			chmod 664 /etc/fstab
+			chgrp adm /etc/fstab
+			echo "$AZURE_RAID_DEVICE $AZURE_DATA_MOUNT   auto defaults,nobootwait,comment=cloudconfig 0       2" >> /etc/fstab
+			mdadm --detail --verbose --scan > /etc/mdadm/mdadm.conf
 			df -h
 		fi
 
 	else
-		if [ -b "/dev/md/data" ]
+		if [ -b "$AZURE_RAID_DEVICE" ]
 		then
-       		 	echo "/dev/md/data alread exists moving on..."
+       		 	echo "$AZURE_RAID_DEVICE alread exists moving on..."
 		else
 			echo ""
-			echo "Single disk, skipping mdm configuration..."
+			echo "Single disk, skipping mdm configuration on $hostname"
 			echo ""
 			mkfs -t ext 4 $disks
-			mkdir /mnt/data
-			mount $disks /mnt/data
-			echo "$disks /mnt/data   auto defaults,nobootwait,comment=cloudconfig 0       2" >> /etc/fstab
+			mkdir $AZURE_DATA_MOUNT
+			mount $disks $AZURE_DATA_MOUNT
+			echo "$disks $AZURE_RAID_DEVICE   auto defaults,nobootwait,comment=cloudconfig 0       2" >> /etc/fstab
 		fi
 	fi
 
 	# setup nfs
-	if [ $hostname == "$AZURE_HEAD" ]
+	if [ $hostname == "$AZURE_HEADNODE" ]
 	then
-		fsExist=$( grep "/mnt/data" /etc/fstab ) 
-		echo "fs is $fsExist"
+		fsExist=$( grep "$AZURE_DATA_MOUNT" /etc/fstab ) 
+		#echo "fs is $fsExist"
 		if [ -z "$fsExist" ]
 		then	
-			if [ -b "/dev/md/data" ]
+			if [ -b "$AZURE_RAID_DEVICE" ]
 			then
-				echo "/dev/md/data/ /mnt/data   auto defaults,nobootwait,comment=cloudconfig 0       2" >> /etc/fstab
+				echo "$AZURE_RAID_DEVICE $AZURE_DATA_MOUNT   auto defaults,nobootwait,comment=cloudconfig 0       2" >> /etc/fstab
 			else
-				echo "$disks /mnt/data   auto defaults,nobootwait,comment=cloudconfig 0       2" >> /etc/fstab
+				echo "$disks $AZURE_DATA_MOUNT   auto defaults,nobootwait,comment=cloudconfig 0       2" >> /etc/fstab
 			fi
 		fi
 
-		exportExist=$( grep "/mnt/data" /etc/exports ) 
+		exportExist=$( grep "$AZURE_DATA_MOUNT" /etc/exports ) 
 		echo "export is $exportExist"
 		if [ -z "$exportExist" ]
 		then	
-			echo "/mnt/data 10.0.0.0/24(rw,nohide,insecure,no_subtree_check,async)" >> /etc/exports
+			echo "$AZURE_DATA_MOUNT $AZURE_EXPORTS_SUBNET(rw,nohide,insecure,no_subtree_check,async)" >> /etc/exports
 		fi
 		
 		
-		chmod -R 777 /mnt/data
+		chmod -R 777 $AZURE_DATA_MOUNT
 		mount -a
 		exportfs -a
 	else
-		fsExist=$( grep "/mnt/nfsdata" /etc/fstab ) 
-		echo "fs is $fsExist"
+		fsExist=$( grep "$AZURE_NFS_MOUNT" /etc/fstab ) 
+		#echo "fs is $fsExist"
 		if [ -z "$fsExist" ]
 		then
-			mkdir /mnt/nfsdata
-			echo "$AZURE_HEAD:/mnt/data   /mnt/nfsdata   nfs    auto  0  0" >> /etc/fstab
+			mkdir $AZURE_NFS_MOUNT
+			chmod 664 /etc/fstab
+			chgrp adm /etc/fstab
+			echo "$AZURE_HEADNODE:$AZURE_DATA_MOUNT   $AZURE_NFS_MOUNT   nfs    auto  0  0" >> /etc/fstab
 		fi
 		mount -a 
 	fi
 
 else
 	echo ""
-	echo "No extra disks..."
+	echo "No unknown disks..."
 	echo ""
 fi
 

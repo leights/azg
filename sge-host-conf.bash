@@ -60,7 +60,7 @@ qconf -Aq ~/queue.conf
 #qconf -aattr queue hostlist @allhosts main.q
 
 ## Make sure there is a slot allocated to the execd
-qconf -aattr queue slots "2, [$(hostname)=1]" default
+#qconf -aattr queue slots "2, [$(hostname)=1]" default
 
 ## Adding Exec node to the grid
 

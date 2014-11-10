@@ -8,19 +8,55 @@
 #############################
 
 ## Set SGE_ROOT and SGE_CELL environment variables
+fsExist=$( grep "SGE_ROOT" /etc/profile )
+#echo "fs is $fsExist"
+if [ -z "$fsExist" ]
+then
+
 echo -e export SGE_ROOT=/var/lib/gridengine | sudo tee -a /etc/profile 
 echo -e export SGE_CELL=default  | sudo tee -a /etc/profile 
 
-echo -e export SGE_ROOT=/var/lib/gridengine | sudo tee -a /etc/bash.bachrc
-echo -e export SGE_CELL=default  | sudo tee -a /etc/bash.bachrc
+fi
+
+fsExist=$( grep "SGE_ROOT" /etc/bash.bashrc )
+#echo "fs is $fsExist"
+if [ -z "$fsExist" ]
+then
+
+echo -e export SGE_ROOT=/var/lib/gridengine | sudo tee -a /etc/bash.bashrc
+echo -e export SGE_CELL=default  | sudo tee -a /etc/bash.bashrc
 
 source /etc/profile
 
-## Update atp-get resouce 
-sudo add-apt-repository ppa:webupd8team/java -y
+fi
+
+
+# find what is installed
+
+currentInstalled=$(dpkg --get-selections)
+javaInstall=$(echo currentInstalled|grep oracle-java7-installer)
+openJDKInstall=$(echo currentInstalled|grep openjdk)
+
+
+
+## purge openJDK
+if [ -n "$openJDKInstall" ]
+then
+
 sudo apt-get purge openjdk* -y
-sudo apt-get purge oracle-java7-installer* -y
+
+fi
+
+# add source for Java
+if [ -z "$javaInstall" ]
+then
+
+sudo add-apt-repository ppa:webupd8team/java -y
+echo "oracle-java7-installer shared/accepted-oracle-license-v1-1 boolean true" | sudo debconf-set-selections
+#sudo apt-get purge oracle-java7-installer* -y
 sudo apt-get update -qq
+
+fi
 
 ## Install Gridengine master,client and exec packages on master node
 # unattended gridengine install

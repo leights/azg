@@ -12,7 +12,7 @@ set user [lindex $argv 1]
 set pass [lindex $argv 2]
 set myfile [lindex $argv 3]
 
-spawn scp -oStrictHostKeyChecking=no -oCheckHostIP=no $myfile  $user@$host:/home/$user/.ssh/authorized_keys
+spawn scp -o StrictHostKeyChecking=no -o CheckHostIP=no $myfile  $user@$host:/home/$user/.ssh/authorized_keys
 #spawn ssh-copy-id -i $myfile $user@$host
 expect *assword:
 
