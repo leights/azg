@@ -103,7 +103,7 @@ depArray=("expect" "node" "azure" "nc")
 for i in "${depArray[@]}"
 do
         result=$(which $i|grep "/$i$")
-	if [ "$result" ]
+	if [ -z "$result" ]
 	then
 		echo "Error missing dependency $i"
 		echo "try: apt-get install $i"
