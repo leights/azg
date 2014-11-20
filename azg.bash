@@ -102,7 +102,7 @@ depArray=("expect" "node" "azure" "nc")
 
 for i in "${depArray[@]}"
 do
-        result=$(which $i|grep "no $i")
+        result=$(which $i|grep "/$i$")
 	if [ "$result" ]
 	then
 		echo "Error missing dependency $i"
