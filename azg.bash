@@ -476,7 +476,7 @@ fi
 
 for vm in ${VMNameArray[*]}
 do
-	knownHosts=$(ssh-keygen -F $vm)
+	knownHosts=$(ssh-keygen -F $vm.cloudapp.net)
 	if [ -n "$knownHosts" ]
 	then
 		echo ""
