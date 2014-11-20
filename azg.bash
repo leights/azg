@@ -114,7 +114,7 @@ done
 # Verify/Set account
 
 AZURE_AccName=$(azure account list --json|grep name|awk -F\" '{print $(NF-1)}')
-if [ -z $AZURE_AccName ]
+if [ -z "$AZURE_AccName" ]
 then
 	if [ ! -e $AZURE_PubFile ] 
 	then
@@ -474,17 +474,17 @@ else
 	ssh-keygen -f ./rsa_key -P ""
 fi
 
-	knownHosts=$(grep $vm ~/.ssh/known_hosts)
+for vm in ${VMNameArray[*]}
+do
+	knownHosts=$(ssh-keygen -F $vm)
 	if [ -n "$knownHosts" ]
 	then
 		echo ""
-		echo "removing hosts from ~/.ssh/known_hosts"
+		echo "removing $vm from known_hosts"
 		echo ""
-		newHosts=$(cat ~/.ssh/known_hosts|grep -v $AZURE_VMName)
-		echo $newHosts > ~/.ssh/known_hosts
+		ssh-keygen -R $vm.cloudapp.net
 	fi
-for vm in ${VMNameArray[*]}
-do
+
 	sshStatus=$(nc -z -v -w 5 $vm.cloudapp.net 22  2>&1 | grep succeeded )
 	while [ -z "$sshStatus" ]
 	do
