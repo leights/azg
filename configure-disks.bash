@@ -28,6 +28,8 @@ hostname=$(hostname)
 
 echo "postfix postfix/main_mailer_type select No configuration" | sudo debconf-set-selections
 
+apt-get update
+
 if [ $hostname == "$AZURE_HEADNODE" ]
 then
 	apt-get install mdadm nfs-kernel-server -y
