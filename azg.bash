@@ -288,7 +288,7 @@ else
 		read -p "Press [Enter] key to create vm $vm"
 	fi
 	echo "Creating VM $vm..."
-	azure vm create -u https://$AZURE_SAName.blob.core.windows.net/vhds/$lvm-OS.vhd -z $lvmSize -n $lvm -e 22 -w $AZURE_VNet -b $AZURE_SubNet -l "$AZURE_Location" $lvm $AZURE_Template $AZURE_User $AZURE_Pass
+	azure vm create -u https://$AZURE_SAName.blob.core.windows.net/vhds/$lvm-OS.vhd -z $lvmSize -n $lvm -e 22 -w $AZURE_VNet -b $AZURE_SubNet -l "$AZURE_Location" $lvm $AZURE_Template -u $AZURE_User -p $AZURE_Pass
 fi
 
 addDisks $lvm $ldiskCount
